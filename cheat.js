@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Simple MMO Auto-Step
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  Add an auto-step overlay to Simple MMO
 // @author       You
 // @match        https://web.simple-mmo.com/*
@@ -43,7 +43,7 @@
     const contentContainer = document.createElement('div');
     overlay.appendChild(contentContainer);
 
-    // Create checkbox container
+    // Create checkbox container for auto-step
     const checkboxContainer = document.createElement('div');
     checkboxContainer.style.cssText = `
         display: flex;
@@ -51,13 +51,13 @@
         margin-bottom: 12px;
     `;
 
-    // Create checkbox
+    // Create checkbox for auto-step
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.id = 'enable-auto-step';
     checkbox.style.marginRight = '8px';
 
-    // Create label
+    // Create label for auto-step
     const label = document.createElement('label');
     label.htmlFor = 'enable-auto-step';
     label.textContent = 'Enable auto-step';
@@ -67,6 +67,33 @@
     checkboxContainer.appendChild(checkbox);
     checkboxContainer.appendChild(label);
     contentContainer.appendChild(checkboxContainer);
+
+    // Create checkbox container for captcha solving
+    const captchaCheckboxContainer = document.createElement('div');
+    captchaCheckboxContainer.style.cssText = `
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+    `;
+
+    // Create checkbox for captcha solving
+    const captchaCheckbox = document.createElement('input');
+    captchaCheckbox.type = 'checkbox';
+    captchaCheckbox.id = 'enable-captcha-solving';
+    captchaCheckbox.style.marginRight = '8px';
+    captchaCheckbox.disabled = true; // Disabled as per request
+    
+    // Create label for captcha solving
+    const captchaLabel = document.createElement('label');
+    captchaLabel.htmlFor = 'enable-captcha-solving';
+    captchaLabel.textContent = 'Auto-solve captcha (coming soon)';
+    captchaLabel.style.cursor = 'pointer';
+    captchaLabel.style.color = '#999'; // Grayed out
+    
+    // Add captcha checkbox elements to container
+    captchaCheckboxContainer.appendChild(captchaCheckbox);
+    captchaCheckboxContainer.appendChild(captchaLabel);
+    contentContainer.appendChild(captchaCheckboxContainer);
 
     // Create delay input container
     const delayContainer = document.createElement('div');
@@ -152,72 +179,6 @@
         statusIndicator.style.color = color;
     }
 
-    // Function to handle captcha
-    async function handleCaptcha() {
-        // Check if we're on the captcha page
-        if (window.location.href.includes('/i-am-not-a-bot')) {
-            addLog('На сторінці капчі');
-            
-            // Get the item we need to find
-            const targetItemText = document.querySelector('.text-2xl.text-gray-800')?.textContent.trim();
-            if (!targetItemText) {
-                addLog('Не знайдено текст цілі');
-                return;
-            }
-            addLog(`Шукаємо: ${targetItemText}`);
-
-            // Wait for images to load
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            // Get all buttons with images
-            const buttons = document.querySelectorAll('button');
-            
-            // Try to find the correct button
-            for (const button of buttons) {
-                if (!button.disabled && !button.classList.contains('opacity-40')) {
-                    const img = button.querySelector('img');
-                    if (img) {
-                        // Get image URL
-                        const imgUrl = img.src;
-                        addLog(`Перевіряємо зображення: ${imgUrl}`);
-
-                        // Try to click if it's not disabled
-                        try {
-                            // Get the x-on:click attribute value
-                            const clickHandler = button.getAttribute('x-on:click');
-                            if (clickHandler && clickHandler.includes('chooseItem')) {
-                                // Extract the item ID
-                                const itemId = clickHandler.match(/chooseItem\('([^']+)'/)?.[1];
-                                if (itemId) {
-                                    // Call the chooseItem function directly
-                                    addLog(`Спроба вибрати елемент з ID: ${itemId}`);
-                                    window.chooseItem?.(itemId, false);
-                                    await new Promise(resolve => setTimeout(resolve, 500));
-                                }
-                            } else {
-                                // Fallback to direct click
-                                button.click();
-                                addLog('Пряме натискання кнопки');
-                                await new Promise(resolve => setTimeout(resolve, 500));
-                            }
-                        } catch (error) {
-                            addLog(`Помилка кліку: ${error.message}`);
-                        }
-                    }
-                }
-            }
-        } else {
-            // Check for captcha link
-            const captchaLink = document.querySelector('a[href*="/i-am-not-a-bot"]');
-            if (captchaLink) {
-                addLog('Знайдено посилання на капчу');
-                // Open in new tab
-                window.open(captchaLink.href, '_blank');
-                addLog('Відкрито капчу в новій вкладці');
-            }
-        }
-    }
-
     // Function to start auto-clicking
     function startAutoClick() {
         if (isRunning) return;
@@ -225,10 +186,7 @@
         const delay = parseInt(delayInput.value) || 200;
         updateStatus('Running', '#4CAF50');
 
-        autoClickInterval = setInterval(async () => {
-            // Check for captcha first
-            await handleCaptcha();
-
+        autoClickInterval = setInterval(() => {
             // Find the "Take a step" button
             const stepButton = findStepButton();
 
@@ -294,6 +252,13 @@
             overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
             stopAutoClick();
         }
+    });
+
+    // Add event listener to captcha checkbox (for future use)
+    captchaCheckbox.addEventListener('change', function() {
+        const enabled = this.checked;
+        console.log('Captcha solving enabled (future feature):', enabled);
+        localStorage.setItem('smmoAutoCaptchaEnabled', enabled);
     });
 
     // Add event listener to delay input
