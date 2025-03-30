@@ -11,10 +11,10 @@
 // @grant        GM_setValue
 // @connect      api.cloudflare.com
 // @run-at       document-end
-// @require      https://github.com/anatoliiohorodnyk/simplemmo/raw/refs/heads/master/ui.js
-// @require      https://github.com/anatoliiohorodnyk/simplemmo/raw/refs/heads/master/3-captcha-solver.js
-// @require      https://github.com/anatoliiohorodnyk/simplemmo/raw/refs/heads/master/4-auto-stepper.js
-// @require      https://github.com/anatoliiohorodnyk/simplemmo/raw/refs/heads/master/5-utils.js
+// @require      https://example.com/path/to/2-ui.js
+// @require      https://example.com/path/to/3-captcha-solver.js
+// @require      https://example.com/path/to/4-auto-stepper.js
+// @require      https://example.com/path/to/5-utils.js
 // ==/UserScript==
 
 (function() {
