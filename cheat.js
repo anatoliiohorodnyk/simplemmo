@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Simple MMO Auto-Step
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.7
 // @description  Add an auto-step overlay to Simple MMO with captcha detection
 // @author       You
 // @match        https://web.simple-mmo.com/*
@@ -13,6 +13,16 @@
 
 (function() {
     'use strict';
+
+    // Debug flag - configurable through UI - declared first so it's available to all functions
+    let DEBUG = false;
+
+    // Load DEBUG setting from localStorage right away
+    try {
+        DEBUG = localStorage.getItem('smmoDebugEnabled') === 'true';
+    } catch (e) {
+        // Ignore errors when accessing localStorage
+    }
 
     // Add global styles to ensure overlay is visible on all pages
     GM_addStyle(`
@@ -50,9 +60,6 @@
     let recentlyCompletedCaptcha = false;
     const imageAnalysisCache = new Map();
 
-    // Debug flag - set to false for production
-    const DEBUG = false;
-
     // Log tracking to prevent duplicates
     const recentLogs = new Set();
     const LOG_EXPIRY_TIME = 5000; // 5 seconds before a log can repeat
@@ -75,7 +82,7 @@
 
     // Create header
     const header = document.createElement('div');
-    header.textContent = 'SMMO Auto-Step v1.4';
+    header.textContent = 'SMMO Auto-Step v1.7';
     header.style.cssText = `
         font-weight: bold;
         margin-bottom: 10px;
@@ -139,6 +146,32 @@
     captchaCheckboxContainer.appendChild(captchaCheckbox);
     captchaCheckboxContainer.appendChild(captchaLabel);
     contentContainer.appendChild(captchaCheckboxContainer);
+
+    // Create debug mode checkbox container
+    const debugCheckboxContainer = document.createElement('div');
+    debugCheckboxContainer.style.cssText = `
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+    `;
+
+    // Create checkbox for debug mode
+    const debugCheckbox = document.createElement('input');
+    debugCheckbox.type = 'checkbox';
+    debugCheckbox.id = 'enable-debug-mode';
+    debugCheckbox.style.marginRight = '8px';
+
+    // Create label for debug mode
+    const debugLabel = document.createElement('label');
+    debugLabel.htmlFor = 'enable-debug-mode';
+    debugLabel.textContent = 'Debug mode (verbose logs)';
+    debugLabel.style.cursor = 'pointer';
+    debugLabel.style.color = '#999';
+
+    // Add debug checkbox elements to container
+    debugCheckboxContainer.appendChild(debugCheckbox);
+    debugCheckboxContainer.appendChild(debugLabel);
+    contentContainer.appendChild(debugCheckboxContainer);
 
     // Create delay input container
     const delayContainer = document.createElement('div');
@@ -255,17 +288,64 @@
         statusIndicator.style.color = color;
     }
 
-    // Check if we're on the captcha page
-    function isCaptchaPage() {
-        const isOnCaptchaUrl = window.location.href.includes('/i-am-not-a-bot');
-        const hasCaptchaText = document.querySelector('.text-2xl.text-gray-800') !== null;
-        const hasGrids = document.querySelectorAll('.grid.grid-cols-4').length > 0;
+    // Function to let AI decide which image matches the target
+    async function askAIForDecision(targetItem, imageDescriptions) {
+        try {
+            // Create a prompt for the AI to decide which image matches
+            const prompt = `I'm trying to solve a captcha where I need to identify a "${targetItem}" among 4 images. Here are descriptions of the images:
+            1: ${imageDescriptions[0] || "No description"}
+            2: ${imageDescriptions[1] || "No description"}
+            3: ${imageDescriptions[2] || "No description"}
+            4: ${imageDescriptions[3] || "No description"}
 
-        if (isOnCaptchaUrl && DEBUG) {
-            addLog(`Captcha detection: URL=${isOnCaptchaUrl}, Text=${hasCaptchaText}, Grids=${hasGrids}`);
+            Please tell me which image number (1, 2, 3, or 4) most likely contains the "${targetItem}". Only respond with the image number, nothing else.`;
+
+            return new Promise((resolve) => {
+                GM_xmlhttpRequest({
+                    method: "POST",
+                    url: `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/run/@cf/meta/llama-3-8b-instruct`,
+                    headers: {
+                        "Authorization": `Bearer ${CLOUDFLARE_API_TOKEN}`,
+                        "Content-Type": "application/json"
+                    },
+                    data: JSON.stringify({
+                        prompt: prompt,
+                        max_tokens: 10
+                    }),
+                    onload: function(response) {
+                        try {
+                            const result = JSON.parse(response.responseText);
+                            if (result.success && result.result) {
+                                // Extract just the number from the response
+                                const responseText = result.result.response.trim();
+                                const match = responseText.match(/[1-4]/);
+                                if (match) {
+                                    const chosenNumber = parseInt(match[0]);
+                                    addLog(`AI chose image ${chosenNumber} for "${targetItem}"`);
+                                    resolve(chosenNumber);
+                                } else {
+                                    addLog("AI couldn't determine which image to choose");
+                                    resolve(null);
+                                }
+                            } else {
+                                addLog("AI decision error");
+                                resolve(null);
+                            }
+                        } catch (err) {
+                            addLog("Error parsing AI decision");
+                            resolve(null);
+                        }
+                    },
+                    onerror: function() {
+                        addLog("AI decision request error");
+                        resolve(null);
+                    }
+                });
+            });
+        } catch (error) {
+            addLog("Error asking AI for decision: " + error.message);
+            return null;
         }
-
-        return isOnCaptchaUrl && (hasCaptchaText || hasGrids);
     }
 
     // Check if the page has a link to the captcha
@@ -279,7 +359,31 @@
 
         return captchaLinks.length > 0;
     }
+    // Define the missing isCaptchaPage function
+    // Add this function right after the constants section and before the 'Variables for state tracking' section
 
+    // Function to check if current page is a captcha page
+    function isCaptchaPage() {
+        // Check URL first (most reliable)
+        if (window.location.href.includes('i-am-not-a-bot')) {
+            return true;
+        }
+
+        // Check for captcha-specific elements
+        const captchaTitle = document.querySelector('.text-2xl.text-gray-800');
+        if (captchaTitle && captchaTitle.textContent.includes('Select the image')) {
+            return true;
+        }
+
+        // Check for captcha grid
+        const captchaGrid = document.querySelector('.grid.grid-cols-4:not(.opacity-0)');
+        if (captchaGrid && captchaGrid.querySelectorAll('button').length >= 4) {
+            return true;
+        }
+
+        // Not a captcha page
+        return false;
+    }
     // Function to check for captcha presence and update status
     function checkCaptcha() {
         // First ensure our overlay is visible
@@ -529,31 +633,69 @@
                             description: result.description || "No description"
                         });
                         addLog(`Image ${i+1} description: ${result.description}`);
-
-                        // Check if the description mentions the target item
-                        if (result.description.toLowerCase().includes(targetItemText.toLowerCase())) {
-                            addLog(`Found match for ${targetItemText} in image ${i+1}!`);
-
-                            // Update UI to show found state
-                            captchaLabel.textContent = `Found ${targetItemText}!`;
-
-                            // Auto-click the matching image to solve the captcha
-                            button.click();
-
-                            // Set cooldown after clicking
-                            recentlyCompletedCaptcha = true;
-
-                            break;
-                        }
                     }
 
                     // Short delay between images
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
 
-                // If no match was found, update UI
-                if (captchaCheckbox.checked) {
-                    if (imageAnalyses.length > 0 && !imageAnalyses.some(a => a.description.toLowerCase().includes(targetItemText.toLowerCase()))) {
+                // Only proceed with the decision step if we have analyzed all images
+                if (imageAnalyses.length === 4) {
+                    // Extract only the descriptions in order
+                    const descriptions = Array(4).fill("No description");
+                    for (const analysis of imageAnalyses) {
+                        descriptions[analysis.index] = analysis.description;
+                    }
+
+                    // Now, let's ask the AI which image matches our target
+                    addLog(`Asking AI to choose the correct image for "${targetItemText}"`);
+                    const chosenImageNumber = await askAIForDecision(targetItemText, descriptions);
+
+                    if (chosenImageNumber && chosenImageNumber >= 1 && chosenImageNumber <= 4) {
+                        // Convert to 0-based index
+                        const index = chosenImageNumber - 1;
+                        // Find the matching button
+                        const matchingAnalysis = imageAnalyses.find(a => a.index === index);
+
+                        if (matchingAnalysis) {
+                            addLog(`AI chose image ${chosenImageNumber} (${descriptions[index]})`);
+
+                            // Update UI to show found state
+                            captchaLabel.textContent = `AI chose image ${chosenImageNumber}!`;
+
+                            // Auto-click the matching image to solve the captcha
+                            matchingAnalysis.button.click();
+
+                            // Set cooldown after clicking
+                            recentlyCompletedCaptcha = true;
+                        } else {
+                            addLog(`AI chose image ${chosenImageNumber} but couldn't find matching button`);
+                        }
+                    } else {
+                        addLog("AI couldn't determine which image to choose");
+                    }
+                } else {
+                    // If we couldn't analyze all images, fallback to simple matching
+                    addLog(`Only analyzed ${imageAnalyses.length}/4 images, attempting direct match`);
+
+                    // Check if any description directly mentions the target item
+                    const matchingAnalysis = imageAnalyses.find(analysis =>
+                        analysis.description.toLowerCase().includes(targetItemText.toLowerCase())
+                    );
+
+                    if (matchingAnalysis) {
+                        addLog(`Found direct match for ${targetItemText} in image ${matchingAnalysis.index+1}!`);
+
+                        // Update UI to show found state
+                        captchaLabel.textContent = `Found ${targetItemText}!`;
+
+                        // Auto-click the matching image to solve the captcha
+                        matchingAnalysis.button.click();
+
+                        // Set cooldown after clicking
+                        recentlyCompletedCaptcha = true;
+                    } else {
+                        // No direct match found
                         captchaLabel.textContent = 'Auto-solve captcha (no match found)';
                         setTimeout(() => {
                             if (captchaCheckbox.checked) {
@@ -705,6 +847,22 @@
         }
     });
 
+    // Add event listener to debug checkbox
+    debugCheckbox.addEventListener('change', function() {
+        const enabled = this.checked;
+        DEBUG = enabled;
+        localStorage.setItem('smmoDebugEnabled', enabled);
+
+        // Update UI to reflect state
+        if (enabled) {
+            debugLabel.style.color = '#fff';
+            addLog('Debug mode enabled - verbose logging activated');
+        } else {
+            debugLabel.style.color = '#999';
+            addLog('Debug mode disabled');
+        }
+    });
+
     // Add event listener to delay input
     delayInput.addEventListener('change', function() {
         const delay = parseInt(this.value) || 200;
@@ -729,6 +887,13 @@
     if (savedCaptchaState) {
         captchaLabel.style.color = '#fff';
         captchaLabel.textContent = 'Auto-solve captcha (enabled)';
+    }
+
+    const savedDebugState = localStorage.getItem('smmoDebugEnabled') === 'true';
+    debugCheckbox.checked = savedDebugState;
+    DEBUG = savedDebugState;
+    if (savedDebugState) {
+        debugLabel.style.color = '#fff';
     }
 
     const savedDelay = localStorage.getItem('smmoAutoStepDelay');
@@ -828,5 +993,5 @@
     // Start observing URL changes
     urlObserver.observe(document, { subtree: true, childList: true });
 
-    console.log('Simple MMO Auto-Step v1.4 loaded!');
+    console.log('Simple MMO Auto-Step v1.7 loaded!');
 })();
